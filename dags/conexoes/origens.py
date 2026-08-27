@@ -1,6 +1,6 @@
 import os
 import polars as pl
-from websockets import uri
+
 
 
 def extrair_mysql(query: str) -> pl.DataFrame:
