@@ -131,10 +131,3 @@ def extrair_novo_sistema(query: str) -> pl.DataFrame:
 ```
 
 E no `.env`, cinco variáveis com o mesmo prefixo: `PREFIXO_USER`, `PREFIXO_PASSWORD`, `PREFIXO_HOST`, `PREFIXO_PORT`, `PREFIXO_DB`.
-
-## Erros conhecidos (poupa tempo de debug)
-
-- **`ModuleNotFoundError` no Docker mas funciona local** → geralmente `websockets`/`idlelib`/`multiprocessing` sobrando de autocomplete errado do PyCharm. Confere imports não usados antes de rodar no container.
-- **Mudou o `.env` mas o Airflow continua com valor antigo** → `docker compose restart` **não recarrega** variáveis de ambiente. Precisa `docker compose down && docker compose up -d`.
-- **`Access denied` no MySQL do nada** → normalmente é rotação de senha feita pelo DBA, não bug no código. Confirma com TI antes de investigar o script.
-- **Aviso de `pyarrow` incompatível** → cosmético até agora, mas fixa a versão se quiser silenciar: `pip install "pyarrow<24,>=14.0.1"`.
