@@ -15,7 +15,6 @@ def cronometro(nome: str):
     yield
     print(f"{nome}: {time.perf_counter() - t0:.1f}s")
 
-
 def conferir_carga(df: pl.DataFrame, tabela: str) -> None:
     esperado = df.height
     conn = conectar_snowflake()
