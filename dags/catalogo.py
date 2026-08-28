@@ -19,3 +19,6 @@ ETLS = {
     "fato_cte": (fato_cte, "0 6 * * *"),
     "fato_cte_nota": (fato_cte_nota, "0 6 * * *"),
 }
+
+for _nome, (_funcao, _schedule) in ETLS.items():
+    assert callable(_funcao), f"{_nome} não é uma função! Confira o import em catalogo.py"
