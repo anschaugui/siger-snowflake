@@ -1,0 +1,79 @@
+site_name: ETL SIGER → Snowflake
+site_description: Pipeline de extração e carga do SIGER para o Snowflake, orquestrado em Airflow
+docs_dir: docs
+
+theme:
+  name: material
+  language: pt-BR
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - content.code.copy
+    - toc.follow
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Modo escuro
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Modo claro
+
+plugins:
+  - search:
+      lang: pt
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [dags]          # crítico: é daqui que "from conexoes import ..." resolve
+          options:
+            # montar_uri() usa docstring estilo reST (:param:/:return:/:raises:)
+            docstring_style: sphinx
+            # a maioria das funcoes ainda nao tem docstring; sem isto
+            # o mkdocstrings as omite e a referencia fica vazia
+            show_if_no_docstring: true
+            show_source: true
+            heading_level: 3
+            members_order: source
+            separate_signature: true
+            show_signature_annotations: true
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+nav:
+  - Início: index.md
+  - Arquitetura: arquitetura.md
+  - Modelo de dados: modelo-dados.md
+  - Runbook: runbook.md
+  - Pendências conhecidas: pendencias.md
+  - Referência:
+      - Conexões: referencia/conexoes.md
+      - Dimensões: referencia/dimensoes.md
+      - Fatos: referencia/fatos.md
+      - Orquestração: referencia/orquestracao.md

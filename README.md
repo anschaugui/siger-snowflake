@@ -2,6 +2,24 @@
 
 Pipeline de extração e carga: MySQL/MariaDB (SIGER, ERP da Grupo Sugar/Neorubber) → Snowflake, orquestrado via Apache Airflow.
 
+## Documentação
+
+A documentação completa fica em `docs/` e é servida com MkDocs:
+
+```powershell
+docker compose --profile docs up docs   # http://localhost:8001
+```
+
+| Página | Conteúdo |
+|---|---|
+| **Arquitetura** | Como as camadas se encaixam, o fluxo de uma execução e as decisões de projeto |
+| **Modelo de dados** | Grão, colunas e origem de cada tabela do DW |
+| **Runbook** | Operação, leitura de logs e os erros já vistos em produção |
+| **Pendências conhecidas** | Defeitos levantados na leitura do código, com evidência |
+| **Referência** | API dos módulos, gerada a partir do código-fonte |
+
+Sem Docker: `pip install -r requirements-docs.txt && mkdocs serve`.
+
 ## Stack
 
 - **Extração**: Polars + connectorx (leitura paralela via Arrow, sem passar por Pandas)
