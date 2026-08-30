@@ -9,7 +9,6 @@ query = """
       a.eacu_datult AS ULT_ALTERACAO
     FROM 02794s000.eacumu a
     WHERE a.eacu_emp IN ('S01','S02','N03','N35')
-      AND a.eacu_per >= 202409
 """
 
 def executar() -> int:
