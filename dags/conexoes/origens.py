@@ -3,7 +3,7 @@ import polars as pl
 from .util import montar_uri
 
 
-def extrair_mysql(query: str) -> pl.DataFrame:
+def extrair_mysql(query: str, params=tuple) -> pl.DataFrame:
     df = pl.read_database_uri(query, uri=montar_uri("MYSQL", "mysql"))
     df.columns = [c.upper() for c in df.columns]
     return df

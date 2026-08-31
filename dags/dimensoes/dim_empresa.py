@@ -1,4 +1,5 @@
-from conexoes import pipeline
+from conexoes import pipeline, carregar_snowflake
+
 query = (
     """
 SELECT LMVL_EMP AS EMPRESA, COUNT(*) AS CT_ES
@@ -9,7 +10,7 @@ GROUP BY 1;
 )
 
 def executar() -> int:
-    return pipeline(query, "DIM_EMPRESA")
+    return pipeline(query, "DIM_EMPRESA", destino=carregar_snowflake)
 
 if __name__ == "__main__":
     executar()

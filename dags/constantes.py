@@ -1,0 +1,1 @@
+CONST_EMPRESAS = ('S01','S02','N03','N35')
