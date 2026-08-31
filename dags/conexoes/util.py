@@ -1,7 +1,6 @@
 import os
 from datetime import date
 
-from conexoes import destinos
 
 
 def montar_uri(prefixo: str, esquema: str) -> str:
@@ -42,6 +41,3 @@ def periodo_janela(n_meses: int = 2) -> list[int]:
         if mes == 0:
             mes, ano = 12, ano - 1
     return periodos
-
-def por_periodo(df,tabela):
-    return destinos.carregar_s3_particionado(df, tabela, "PERIODO")

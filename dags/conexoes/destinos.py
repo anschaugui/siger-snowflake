@@ -3,6 +3,8 @@ import os
 import polars as pl
 import snowflake.connector
 import boto3
+from more_itertools.more import bucket
+
 
 def conectar_snowflake():
     return snowflake.connector.connect(
@@ -47,13 +49,19 @@ def carregar_s3_parquet(df: pl.DataFrame, tabela:str) -> int:
     return df.height
 
 def carregar_s3_particionado(df: pl.DataFrame, tabela:str, coluna_particao:str) -> int:
+    s3 = conectar_s3()
+    bucket = os.environ["AWS_S3_BUCKET"]
+    coluna = coluna_particao.lower()
     for valor in df[coluna_particao].unique():
         parte = df.filter(pl.col(coluna_particao) == valor)
         buffer = io.BytesIO()
         parte.write_parquet(buffer)
-        conectar_s3().put_object(
-            Bucket=os.environ["AWS_S3_BUCKET"],
-            Key=f'silver/{tabela}/{tabela}_{valor}.parquet',
-            Body=buffer.getvalue(),
+        s3.put_object(
+            Bucket=bucket,
+            Key=f'silver/{tabela}/{coluna}={valor}/tabela.parquet',
+            body=buffer.getvalue(),
         )
     return df.height
+
+def por_periodo(df: pl.DataFrame, tabela: str) -> int:
+    return carregar_s3_particionado(df, tabela, "PERIODO")
