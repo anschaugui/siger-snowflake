@@ -3,8 +3,6 @@ import os
 import polars as pl
 import snowflake.connector
 import boto3
-from more_itertools.more import bucket
-
 
 def conectar_snowflake():
     return snowflake.connector.connect(
@@ -53,13 +51,13 @@ def carregar_s3_particionado(df: pl.DataFrame, tabela:str, coluna_particao:str) 
     bucket = os.environ["AWS_S3_BUCKET"]
     coluna = coluna_particao.lower()
     for valor in df[coluna_particao].unique():
-        parte = df.filter(pl.col(coluna_particao) == valor)
+        parte = df.filter(pl.col(coluna_particao) == valor).drop(coluna_particao)
         buffer = io.BytesIO()
         parte.write_parquet(buffer)
         s3.put_object(
             Bucket=bucket,
-            Key=f'silver/{tabela}/{coluna}={valor}/tabela.parquet',
-            body=buffer.getvalue(),
+            Key=f'silver/{tabela}/{coluna}={valor}/{tabela}.parquet',
+            Body=buffer.getvalue(),
         )
     return df.height
 

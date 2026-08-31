@@ -1,8 +1,8 @@
-from conexoes import pipeline
-from conexoes.util import lista_sql, periodo_janela, por_periodo
+from conexoes import pipeline, por_periodo
+from conexoes.util import lista_sql, periodo_janela
 from constantes import CONST_EMPRESAS
 
-def executar(n_meses: int | None = 2) -> int:
+def executar(n_meses: int | None = 100) -> int:
     filtro_periodo = ""
     if n_meses is not None:
         periodos = periodo_janela(n_meses)
