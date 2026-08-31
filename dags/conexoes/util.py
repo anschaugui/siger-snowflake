@@ -1,4 +1,7 @@
 import os
+from datetime import date
+
+from conexoes import destinos
 
 
 def montar_uri(prefixo: str, esquema: str) -> str:
@@ -24,3 +27,21 @@ def montar_uri(prefixo: str, esquema: str) -> str:
         f"{esquema}://{os.environ[f'{prefixo}_USER']}:{os.environ[f'{prefixo}_PASSWORD']}"
         f"@{os.environ[f'{prefixo}_HOST']}:{os.environ[f'{prefixo}_PORT']}/{os.environ[f'{prefixo}_DB']}"
     )
+
+def lista_sql(valores) -> str:
+    """Monta 'a','b','c' a partir de qualquer lista, pronta pra colar num IN (...)."""
+    return ",".join(f"'{v}'" for v in valores)
+
+def periodo_janela(n_meses: int = 2) -> list[int]:
+    hoje = date.today()
+    periodos = []
+    ano, mes = hoje.year, hoje.month
+    for _ in range(n_meses):
+        periodos.append(ano * 100 + mes)
+        mes -=1
+        if mes == 0:
+            mes, ano = 12, ano - 1
+    return periodos
+
+def por_periodo(df,tabela):
+    return destinos.carregar_s3_particionado(df, tabela, "PERIODO")

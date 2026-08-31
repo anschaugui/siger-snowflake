@@ -56,3 +56,13 @@ def pipeline(query: str,
             arquivo_s3(df, tabela)
     print(f"{tabela}: {nrows}")
     return nrows
+
+def pipeline_completo(query:str, tabela:str, **kwargs) -> int:
+    """
+    O caso comum: Snowflake + s3, sem partição. atalho para pipeline().
+    :param query:
+    :param tabela:
+    :param kwargs:
+    :return:
+    """
+    return pipeline(query, tabela, destinos=carregar_snowflake, arquivo_s3=carregar_s3_parquet, **kwargs)
