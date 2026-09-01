@@ -18,7 +18,7 @@
 #   CHAR(3): no Parquet isso vira string com espaço à direita, e no Athena o
 #   JOIN simplesmente NÃO CASA — sem erro, a linha some.
 
-from conexoes import pipeline, carregar_s3_parquet
+from conexoes import pipeline
 
 query = (
     """
@@ -57,7 +57,7 @@ WHERE c.fcad_emp = 'N03'
 
 
 def executar() -> int:
-    return pipeline(query, "DIM_CLIENTE", arquivo_s3=carregar_s3_parquet)
+    return pipeline(query, "DIM_CLIENTE")
 
 
 if __name__ == "__main__":

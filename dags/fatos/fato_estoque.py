@@ -1,4 +1,4 @@
-from conexoes import pipeline, por_periodo
+from conexoes import pipeline
 from conexoes.util import lista_sql, periodo_janela
 from constantes import CONST_EMPRESAS
 
@@ -19,7 +19,7 @@ def executar(n_meses: int | None = 100) -> int:
         WHERE a.eacu_emp IN ({lista_sql(CONST_EMPRESAS)})
           {filtro_periodo}
     """
-    return pipeline(query, "FATO_ESTOQUE", destino=None, arquivo_s3=por_periodo)
+    return pipeline(query, "FATO_ESTOQUE", particao="PERIODO")
 
 if __name__ == "__main__":
     executar()

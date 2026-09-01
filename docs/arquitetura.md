@@ -25,27 +25,31 @@ flowchart LR
         CLI["main.py<br/><i>CLI local</i>"]
     end
 
-    subgraph destino["Destino"]
+    subgraph destino["Destinos (DW_DESTINOS)"]
+        S3[("S3 · Parquet<br/>dw-sugarshoes-2026")]
         SF[("Snowflake<br/>SUGARSHOES.DW")]
     end
 
     AF --> CAT
     CLI --> CAT
     MY -->|connectorx / Arrow| PIPE
+    PIPE -->|boto3| S3
     PIPE -->|ADBC| SF
+    S3 -.->|Glue Crawler| AT["Athena<br/>dw_sugarshoes"]
 ```
 
 **O que cada camada sabe:**
 
 - Um **ETL** (`fatos/fato_cte.py`) sabe apenas *qual SQL rodar* e *em que tabela
-  gravar*. Não conhece credenciais, driver nem orquestrador.
+  gravar*. Não conhece credenciais, driver, orquestrador **nem destino**.
 - O **pacote `conexoes`** sabe *como* falar com cada banco. Não conhece nenhuma regra
   de negócio.
 - O **catálogo** e o **orquestrador** sabem *quais* ETLs existem e *quando* rodam. Não
   conhecem SQL.
 
-Trocar o Airflow por outro scheduler, ou o Snowflake por outro destino, mexe em uma
-camada só.
+Trocar o Airflow por outro scheduler mexe em uma camada só. Trocar o **destino** não
+mexe em camada nenhuma: é a variável `DW_DESTINOS`, descrita em
+[Destinos](#destinos).
 
 ---
 
@@ -58,14 +62,17 @@ dags/
 ├── etl_siger_snowflake.py     # fábrica de DAGs — gera 1 DAG por item do catálogo
 │
 ├── conexoes/                  # toda a mecânica de I/O
-│   ├── __init__.py            #   pipeline(), cronometro(), conferir_carga()
+│   ├── __init__.py            #   DESTINOS, pipeline(), cronometro(), conferir_carga()
 │   ├── util.py                #   montar_uri()
 │   ├── origens.py             #   extrair_mysql(), extrair_postgres_senda()
-│   └── destinos.py            #   conectar_snowflake(), carregar_snowflake()
+│   └── destinos.py            #   carregar_snowflake(), carregar_s3(), enviar_arquivo()
 │
 ├── dimensoes/                 # 1 arquivo por dimensão
+│   ├── dim_cliente.py
 │   ├── dim_colaborador.py
 │   ├── dim_empresa.py
+│   ├── dim_formulacao.py
+│   ├── dim_fornecedor.py
 │   ├── dim_local_est.py
 │   ├── dim_municipio.py
 │   └── dim_produto.py
@@ -91,39 +98,56 @@ sequenceDiagram
     participant E as ETL (ex.: fato_cte)
     participant P as pipeline()
     participant S as SIGER (MySQL)
-    participant W as Snowflake
+    participant D as destino (S3 / Snowflake)
 
     O->>E: executar()
     E->>P: pipeline(query, "FATO_CTE")
     activate P
+    Note over P: destinos_configurados() lê DW_DESTINOS<br/>e FALHA se estiver errado
     P->>S: extrair_mysql(query)
     S-->>P: DataFrame Polars (colunas em MAIÚSCULO)
     Note over P: cronômetro: "extração: 12.4s"
-    P->>W: carregar_snowflake(df, tabela)
-    W-->>P: nº de linhas escritas
-    Note over P: cronômetro: "carga: 8.1s"
-    P->>W: conferir_carga() — SELECT COUNT(*)
-    W-->>P: contagem real
-    Note over P: [OK] ou [ERROR]
+    loop para cada destino configurado
+        P->>D: DESTINOS[nome](df, tabela, particao)
+        D-->>P: nº de linhas escritas
+        Note over P: cronômetro: "carga s3: 0.2s"
+        opt destino == snowflake
+            P->>D: conferir_carga() — SELECT COUNT(*)
+            Note over P: [OK] ou [ERROR]
+        end
+    end
     P-->>E: nrows
     deactivate P
 ```
+
+!!! note "A extração acontece UMA vez"
+    Ela domina o custo do ETL — medido: **13,0 s de extração contra 0,20 s de
+    particionamento**. Por isso o laço é sobre os destinos, não sobre o pipeline
+    inteiro: gravar nos dois custa quase o mesmo que gravar em um.
 
 As quatro etapas, no código (`dags/conexoes/__init__.py`):
 
 | Etapa | Função | O que faz |
 |---|---|---|
 | **Extrair** | `extrair_mysql()` | `pl.read_database_uri()` via connectorx; normaliza os nomes de coluna para maiúsculo |
-| **Carregar** | `carregar_snowflake()` | `df.write_database(..., engine="adbc", if_table_exists="replace")` |
-| **Conferir** | `conferir_carga()` | `SELECT COUNT(*)` no destino e compara com `df.height` |
+| **Resolver** | `destinos_configurados()` | lê `DW_DESTINOS` e **falha alto** antes da extração se o nome for desconhecido |
+| **Carregar** | `DESTINOS[nome]()` | `carregar_s3()` grava Parquet; `carregar_snowflake()` faz `write_database(engine="adbc", if_table_exists="replace")` |
+| **Conferir** | `conferir_carga()` | `SELECT COUNT(*)` — **só quando o Snowflake está entre os destinos**; no S3 não há tabela para contar |
 | **Cronometrar** | `cronometro()` | context manager que imprime o tempo de cada fase |
 
 O passo de conferência é o que dá observabilidade barata ao pipeline: cada execução
 deixa nos logs uma linha auditável.
 
 ```text
-[OK] FATO_CTE_NOTA: extraído=111507 | snowflake=111507
-FATO_CTE_NOTA: 111507 linhas
+  extração: 12.4s
+  carga s3: 0.2s
+FATO_CTE_NOTA: 111507 linhas → s3
+```
+
+Com o Snowflake entre os destinos, aparece também a linha de conferência:
+
+```text
+  [OK] FATO_CTE_NOTA: extraído=111507 | snowflake=111507
 ```
 
 Um `[ERROR]` nessa linha significa divergência de contagem entre origem e destino — a
@@ -185,6 +209,55 @@ e dimensões acontece na camada de consumo (BI), não na carga.
 
 ---
 
+## Destinos
+
+`conexoes/__init__.py` mantém um **registro** de destinos, e a variável de ambiente
+`DW_DESTINOS` decide quais rodam:
+
+```python
+DESTINOS = {
+    "s3":        carregar_s3,
+    "snowflake": carregar_snowflake,
+}
+```
+
+```bash
+DW_DESTINOS=s3                # padrao
+DW_DESTINOS=s3,snowflake      # extrai uma vez, grava nos dois
+```
+
+### A assinatura única é o que faz funcionar
+
+Todo destino recebe `(df, tabela, particao=None)`. É por isso que
+`carregar_snowflake()` aceita um `particao` que **ignora**: sem a assinatura idêntica,
+o `pipeline()` precisaria de um `if` para cada destino, e acrescentar um destino novo
+voltaria a ser uma alteração no meio do pipeline.
+
+Destino novo — Postgres, DuckDB, Iceberg — entra **só** no dicionário `DESTINOS` e
+passa a valer para todos os ETLs, sem tocar em nenhum deles.
+
+### O que o ETL ainda decide
+
+```python
+pipeline(query, "DIM_CLIENTE")                       # dimensão
+pipeline(query, "FATO_ESTOQUE", particao="PERIODO")  # fato particionado
+```
+
+`particao` fica no módulo de propósito: é propriedade do **dado** (o estoque é mensal,
+aponte para onde apontar), não do destino.
+
+!!! warning "`destinos=` existe, mas é escape hatch"
+    `pipeline(q, "X", destinos=["snowflake"])` prende o ETL a um destino de novo — o
+    problema que este desenho resolve. Use só para um teste pontual.
+
+!!! danger "A validação acontece ANTES da extração"
+    `destinos_configurados()` levanta `ValueError` se `DW_DESTINOS` estiver vazio ou
+    tiver um nome desconhecido. Isso é deliberado: a extração é a parte cara, e um
+    destino digitado errado passando batido significaria extrair tudo e descartar em
+    silêncio.
+
+---
+
 ## Configuração por variáveis de ambiente
 
 Nenhuma credencial aparece no código. `montar_uri()` monta uma URI a partir de um
@@ -210,10 +283,21 @@ As variáveis chegam ao processo por dois caminhos, dependendo de onde ele roda:
 | **Docker / Airflow** | `env_file: .env` no `docker-compose.yaml`, injetado no contêiner |
 | **Local (`python main.py`)** | `load_dotenv()` no topo de `conexoes/__init__.py` |
 
-O Snowflake é a exceção ao padrão de prefixo: `destinos.py` lê
-`SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_USER`, `SNOWFLAKE_PASSWORD`, `SNOWFLAKE_WAREHOUSE`,
-`SNOWFLAKE_DATABASE` e `SNOWFLAKE_SCHEMA` diretamente, porque a URI do Snowflake tem
-formato próprio (`account` no lugar de `host:port`, `warehouse` como query string).
+Os **destinos** não seguem o padrão de prefixo, porque nenhum deles usa URI no formato
+`host:port`:
+
+| Destino | Variáveis |
+|---|---|
+| Snowflake | `SNOWFLAKE_ACCOUNT`, `_USER`, `_PASSWORD`, `_WAREHOUSE`, `_DATABASE`, `_SCHEMA` |
+| S3 | `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_S3_BUCKET` |
+| Seleção | `DW_DESTINOS` — lista separada por vírgula |
+
+A URI do Snowflake tem formato próprio (`account` no lugar de `host:port`, `warehouse`
+como query string); o S3 não usa URI nenhuma, e sim um cliente boto3.
+
+!!! danger "A chave da AWS vem SEMPRE do ambiente"
+    Chave de acesso em arquivo versionado é o jeito mais comum de vazar uma conta — e
+    um bucket vazado é cobrado de você. Confira que o `.env` está no `.gitignore`.
 
 ---
 
@@ -231,14 +315,29 @@ materializado como objeto Python nem convertido para Pandas — o que importa qu
 `snowflake-connector-python[pandas]` o exige como dependência transitiva, não porque o
 pipeline o utilize.
 
+### Destino é configuração, não código
+
+A justificativa completa está em
+[Conceitos](conceitos.md#destino-e-configuracao-nao-codigo). Em resumo: antes cada
+dimensão trazia `destino=` e `arquivo_s3=` na chamada do `pipeline()`, e mudar o
+destino do DW obrigava a abrir os 10 arquivos, um a um. O módulo passou a declarar
+apenas **o que** extrai.
+
 ### Full refresh, não incremental
 
-Toda tabela é reescrita por inteiro (`if_table_exists="replace"`). É a escolha certa
+Toda tabela é reescrita por inteiro — `if_table_exists="replace"` no Snowflake, e no
+S3 a mesma chave sobrescrita. É a escolha certa
 para o volume atual: elimina a necessidade de chaves de merge, de controle de
 *watermark* e de lógica de deduplicação, e torna cada execução idempotente — rodar duas
 vezes seguidas dá o mesmo resultado.
 
 O corte de `2024-09-01` nos fatos transacionais é o que mantém esse custo aceitável.
+
+**A exceção é o `FATO_ESTOQUE`**, que é particionado por período. Cada execução
+reescreve apenas as pastas `periodo=AAAAMM` da janela pedida (`n_meses`), e o
+histórico fora dela fica intacto — um incremental barato que sai de graça do formato
+Hive, sem watermark nem chave de merge. Ver
+[Conceitos → Partição](conceitos.md#particao).
 
 **Onde isso dói:** existe uma janela de alguns segundos, durante a carga, em que a
 tabela está sendo substituída e uma consulta de BI pode pegá-la vazia ou parcial. Com

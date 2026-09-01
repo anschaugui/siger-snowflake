@@ -1,4 +1,4 @@
-from conexoes import pipeline, carregar_s3_parquet
+from conexoes import pipeline
 
 query = (
     """
@@ -28,7 +28,7 @@ WHERE p.npro_emp = 'N03';
 
 
 def executar() -> int:
-    return pipeline(query, "DIM_PRODUTO", arquivo_s3=carregar_s3_parquet)
+    return pipeline(query, "DIM_PRODUTO")
 
 
 if __name__ == "__main__":

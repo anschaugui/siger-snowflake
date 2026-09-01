@@ -1,5 +1,5 @@
-site_name: ETL SIGER → Snowflake
-site_description: Pipeline de extração e carga do SIGER para o Snowflake, orquestrado em Airflow
+site_name: DW Sugar & Neo — SIGER → S3 / Snowflake
+site_description: Data warehouse dimensional do Grupo Sugar/Neorubber — extração do SIGER para S3 (Athena) e Snowflake, orquestrada em Airflow
 docs_dir: docs
 
 theme:
@@ -68,8 +68,10 @@ markdown_extensions:
 
 nav:
   - Início: index.md
+  - Conceitos: conceitos.md
   - Arquitetura: arquitetura.md
   - Modelo de dados: modelo-dados.md
+  - Data warehouse na AWS: aws.md
   - Runbook: runbook.md
   - Pendências conhecidas: pendencias.md
   - Referência:

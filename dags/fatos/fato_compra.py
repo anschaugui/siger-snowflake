@@ -13,7 +13,7 @@ SELECT
 FROM 02794s000.npedid n
 JOIN 02794s000.nipfat ni
   ON ni.nipf_emp = n.nped_emp AND ni.nipf_npo = n.nped_cod
-WHERE n.nped_emp IN ('S01','S02','N03','N35')
+WHERE n.nped_emp IN ({lista_sql(CONST_EMPRESAS)})
   AND n.nped_pos <> 9
   AND n.nped_ees IN (20,22,23,37,88)
   AND ni.nipf_pos <> 9

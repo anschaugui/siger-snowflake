@@ -1,14 +1,21 @@
 # Pendências conhecidas
 
-Levantamento feito na leitura do código e dos logs de execução, em **30/08/2026**.
-Nada aqui foi corrigido — esta página existe para registrar o que foi encontrado, com
-evidência, para que a correção seja uma decisão consciente.
+Levantamento feito na leitura do código e dos logs de execução, em **30/08/2026** e
+revisado em **31/08/2026**. Esta página registra o que foi encontrado, com evidência,
+para que a correção seja uma decisão consciente — e marca o que já foi resolvido.
 
 Ordenado por impacto.
 
 ---
 
-## 1. A CLI local (`main.py`) não executa nenhum ETL
+## 1. ~~A CLI local (`main.py`) não executa nenhum ETL~~ · RESOLVIDO em 31/08/2026
+
+!!! success "Corrigido"
+    `main.py` passou a desempacotar a tupla — `for nome, (funcao, _cron) in
+    ETLS.items()` e `funcao, _cron = ETLS[args.etl]`. A CLI local voltou a funcionar,
+    e o [Runbook](runbook.md#localmente-teste-rapido) volta a valer como escrito.
+
+    O registro abaixo fica como histórico do defeito.
 
 **Onde:** `dags/main.py:13-17` · `dags/catalogo.py:12-22`
 
@@ -32,8 +39,24 @@ pelo Airflow não é afetado — `etl_siger_snowflake.py` desempacota a tupla co
 (`for nome, (funcao, schedule) in ETLS.items()`).
 
 **Observação:** o `README.md` e o [Runbook](runbook.md#localmente-teste-rapido)
-documentam essa CLI como a forma de testar localmente. Enquanto isso não for
-resolvido, o teste local precisa passar por `airflow tasks test` dentro do contêiner.
+documentam essa CLI como a forma de testar localmente.
+
+---
+
+## 1b. Três dimensões fora do catálogo
+
+**Onde:** `dags/catalogo.py`
+
+`dim_cliente`, `dim_fornecedor` e `dim_formulacao` existem em `dags/dimensoes/`, estão
+no formato novo (`pipeline(query, "TABELA")`) e foram validadas contra a origem — mas
+**não estão registradas** em `ETLS`.
+
+**Efeito:** não rodam pelo Airflow nem por `main.py all`. Só à mão, com
+`python -m dimensoes.dim_cliente`.
+
+**Antes de registrar**, vale rodar as validações de grão e de órfãos no Athena
+descritas em [Data warehouse na AWS](aws.md#validacao-depois-de-cada-carga) — o
+catálogo é o que promete que o ETL está pronto.
 
 ---
 
@@ -184,3 +207,5 @@ Get-Content requirements.txt | Set-Content -Encoding utf8 requirements.txt.novo
 | `dags/dimensoes/.idea/` | Pasta de configuração de IDE dentro do pacote. Está corretamente ignorada (o padrão `.idea/` do `.gitignore` casa em qualquer profundidade) e não é rastreada — mas é resquício de um projeto PyCharm aninhado e pode ser apagada |
 | Todo o código, exceto `montar_uri()` | Nenhuma outra função tem docstring; a documentação de referência gerada fica limitada às assinaturas |
 | Queries | `2024-09-01` e a lista `S01, S02, N03, N35` estão repetidos em vários arquivos; mudar o escopo exige editar cada um |
+| `fatos/fato_estoque.py` | `n_meses` está com valor padrão **100** — reprocessa mais de 8 anos a cada execução. Se foi para um backfill, vale voltar para 2 antes de agendar |
+| `conexoes/__init__.py` | `conferir_carga()` abre uma conexão Snowflake por tabela; com o catálogo cheio são ~12 conexões por ciclo |

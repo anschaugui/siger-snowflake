@@ -1,7 +1,11 @@
 # Modelo de dados
 
-Todas as tabelas são carregadas em **`SUGARSHOES.DW`** no Snowflake, em modo
-*full refresh* — a tabela é substituída inteira a cada execução.
+As tabelas são carregadas nos destinos configurados em `DW_DESTINOS` — **S3**
+(`silver/<TABELA>/`, consultável por Athena) e/ou **Snowflake** (`SUGARSHOES.DW`) — em
+modo *full refresh*, com a exceção do `FATO_ESTOQUE`, particionado por período.
+
+Os conceitos por trás do modelo (grão, dimensão conformada, chave natural, fan-out)
+estão em [Conceitos](conceitos.md).
 
 ## Diagrama
 
@@ -15,7 +19,15 @@ erDiagram
     DIM_PRODUTO      ||--o{ FATO_COMPRA    : "EMPRESA+PRODUTO"
     DIM_PRODUTO      ||--o{ FATO_ESTOQUE   : "EMPRESA+PRODUTO"
     DIM_LOCAL_EST    ||--o{ FATO_ESTOQUE   : "EMPRESA+LOCAL"
+    DIM_PRODUTO      ||--o{ DIM_FORMULACAO : "PRODUTO"
+    DIM_MUNICIPIO    ||--o{ DIM_CLIENTE    : "COD_IBGE"
+    DIM_MUNICIPIO    ||--o{ DIM_FORNECEDOR : "COD_IBGE"
 ```
+
+!!! note "Três dimensões ainda fora do catálogo"
+    `DIM_CLIENTE`, `DIM_FORNECEDOR` e `DIM_FORMULACAO` estão modeladas e validadas na
+    origem, mas ainda não foram registradas em `catalogo.py` — não rodam pelo Airflow.
+    Ver [Pendências](pendencias.md).
 
 ## Escopo comum
 
@@ -23,6 +35,14 @@ Quase todas as queries compartilham dois filtros:
 
 - **Empresas** — `S01`, `S02`, `N03`, `N35`. São as unidades ativas do grupo; as demais
   ficam de fora do DW.
+
+    !!! tip "As dimensões novas leem só `N03`"
+        O cadastro do SIGER é replicado por empresa, e foi **medido que o conteúdo é
+        idêntico** nas quatro (zero divergência em CNPJ, razão social, cidade, marca,
+        grupo e coleção). Por isso `DIM_CLIENTE`, `DIM_FORNECEDOR`, `DIM_PRODUTO` e
+        `DIM_FORMULACAO` leem apenas `N03` e **não carregam a coluna `EMPRESA`** — que
+        passa a viver no fato. Ver
+        [Conceitos → dimensão conformada](conceitos.md#dimensao-conformada).
 - **Data de corte** — `>= '2024-09-01'` nos fatos transacionais e nas dimensões
   derivadas deles. Define o histórico que o DW cobre.
 
@@ -112,6 +132,91 @@ O `CASE` cobre as 27 unidades federativas. Um código fora dessa lista produz `U
 Diferente das outras, esta dimensão é derivada do movimento e não de um cadastro: só
 aparecem empresas com CT-e de aquisição de transporte desde `2024-09-01`, e `CT_ES` é
 uma contagem que muda a cada carga.
+
+### `DIM_CLIENTE`
+
+**Origem:** `fcadas` (`fcad_tip='C'`, `fcad_emp='N03'`) + `ftabel_rlj` (rede de lojas)
+**Grão:** um cliente — `CLIENTE`. **Sem empresa.**
+**Volume medido (31/08/2026):** 79.309 linhas / 79.309 clientes
+
+| Coluna | Origem | Observação |
+|---|---|---|
+| `CLIENTE` | `fcad_cod` | chave natural |
+| `CNPJ_CPF` | `fcad_cgc` | |
+| `TIPO_PESSOA` | `fcad_tin` | `J` → JURIDICA (68.420), `F` → FISICA (10.889), **sem exceções** |
+| `RAZAO_SOCIAL` | `fcad_del` | 60 caracteres — **não** `fcad_des`, que trunca em 32 |
+| `NOME_FANTASIA` | `fcad_fan` | |
+| `COD_IBGE` | `fcad_cmu` | FK para `DIM_MUNICIPIO`; 78.558 preenchidos, **0 órfãos** |
+| `REDE_LOJA` / `REDE_LOJA_NOME` | `ftabel_rlj` | `LEFT JOIN`; 11.880 clientes |
+| `SITUACAO_COD` | `fcad_sit` | 1 (76.392), 3 (2.688), 2 (222), 4 (1) — **sem rótulo**: não há tabela de domínio no schema |
+| `CNPJ_VALIDO` | derivada | `0` para placeholders; 545 dos 79.309 |
+
+!!! danger "CNPJ placeholder é grande"
+    `00000000000191` (o CNPJ do Banco do Brasil) aparece em **435 cadastros** e
+    `00000000191` em outros 110. Sem a flag `CNPJ_VALIDO`, eles viram os "clientes
+    prioritários" de qualquer ranking.
+
+!!! note "O representante NÃO está aqui"
+    `fcad_rep` tem **2 valores distintos** em 79 mil cadastros — o campo não é usado.
+    O vínculo cliente↔representante vem da geografia e do pedido.
+
+### `DIM_FORNECEDOR`
+
+**Origem:** `fcadas` (`fcad_tip='F'`, `fcad_emp='N03'`) + `lmvliv` (CT-e)
+**Grão:** um fornecedor — `FORNECEDOR`. **Sem empresa.**
+**Volume medido:** 13.178 linhas / 13.178 fornecedores
+
+Mesmos atributos da `DIM_CLIENTE` (menos `REDE_LOJA`, preenchida em apenas 31 de
+13.178), mais:
+
+| Coluna | Origem | Observação |
+|---|---|---|
+| `EH_TRANSPORTADORA` | `lmvliv` naturezas 1352/2352 | *behavior tag*: 225 fornecedores |
+
+!!! tip "Sem corte de data, de propósito"
+    227 códigos emitiram CT-e no histórico (225 são fornecedores, 2 estão cadastrados
+    como cliente) contra 163 desde 2024-09 — e a versão sem janela roda em **894 ms
+    contra 5,3 s**. O porquê está em
+    [Conceitos → behavior tag](conceitos.md#regra-de-negocio-mora-na-dimensao).
+
+!!! warning "Colisão de código: conferir sempre"
+    Nenhum `fcad_cod` aparece como `C` e `F` ao mesmo tempo hoje. Se um dia aparecer, o
+    mesmo código descreveria duas entidades e todo fato que juntar por código traria a
+    linha errada, sem erro:
+
+    ```sql
+    SELECT COUNT(*) FROM dim_cliente c JOIN dim_fornecedor f ON f.fornecedor = c.cliente;  -- 0
+    ```
+
+### `DIM_FORMULACAO`
+
+**Origem:** `eformu` (`efor_emp='N03'`)
+**Grão:** uma formulação — `FORMULACAO` (`efor_idf`). **Sem empresa.**
+**Volume medido:** 96.676 linhas / 96.676 formulações, sobre 21.965 produtos
+
+| Coluna | Origem | Observação |
+|---|---|---|
+| `FORMULACAO` | `efor_idf` | chave natural de **uma coluna só** |
+| `PRODUTO` | `efor_cod` | FK para `DIM_PRODUTO` — **0 órfãos** |
+| `COMBINACAO` | `efor_cmb` | o número que os fatos de venda carregam |
+| `REVISAO` | `efor_rev` | 0 a 2 |
+| `REVISAO_ATUAL` | derivada | `1` na revisão máxima do par `(produto, combinação)` |
+| `REFERENCIA`, `DESCRICAO`, `PESO`, `PRODUTIVIDADE` | `eformu` | |
+
+!!! danger "Fan-out garantido sem `REVISAO_ATUAL`"
+    `(produto, combinação)` **não é único**: 96.676 linhas para 96.330 pares — são 346
+    formulações com mais de uma revisão. Um fato que carregue só
+    `(produto, combinação)` encontraria 2 ou 3 linhas aqui e multiplicaria o valor.
+    Filtrando `REVISAO_ATUAL = 1` sobra exatamente uma.
+
+!!! note "As revisões são reais, não duplicatas"
+    Os **itens** mudam por revisão (`eitfor` tem `eitf_rev`), então cada revisão é uma
+    formulação de verdade. Por isso a dimensão as mantém, em vez de colapsar.
+
+!!! warning "11.971 produtos não têm formulação"
+    São 35% do cadastro — insumos, peças de manutenção, material de consumo. Eles
+    existem na `DIM_PRODUTO` e não existem aqui, e isso está certo. A combinação `0`
+    também **não serve como membro genérico**: só 10.332 dos 21.965 produtos a têm.
 
 ---
 

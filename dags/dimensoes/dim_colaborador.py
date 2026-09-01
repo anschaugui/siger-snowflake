@@ -1,4 +1,4 @@
-from conexoes import pipeline, carregar_snowflake, carregar_s3_parquet
+from conexoes import pipeline
 
 query = (
     """
@@ -26,9 +26,7 @@ GROUP BY 1,2,3,4,5,6;
 )
 
 def executar() -> int:
-    return pipeline(query, "DIM_COLABORADOR",
-                    destino=carregar_snowflake,
-                    arquivo_s3=carregar_s3_parquet)
+    return pipeline(query, "DIM_COLABORADOR")
 
 if __name__ == "__main__":
     executar()

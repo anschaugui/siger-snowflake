@@ -1,12 +1,17 @@
-# ETL SIGER → Snowflake
+# DW Sugar & Neo
 
-Pipeline de extração e carga que leva dados do **SIGER** (ERP MySQL/MariaDB do Grupo
-Sugar/Neorubber, schema `02794s000`) para o **Snowflake** (`SUGARSHOES.DW`), orquestrado
-por **Apache Airflow**.
+Data warehouse dimensional do Grupo Sugar/Neorubber. Extrai do **SIGER** (ERP
+MySQL/MariaDB, schema `02794s000`) e grava em **S3** (consultável por Athena) e/ou
+**Snowflake**, orquestrado por **Apache Airflow**.
 
 O projeto é deliberadamente pequeno: cada ETL é um arquivo com uma query SQL e uma
 função `executar()`. Toda a mecânica de conexão, extração, carga e conferência vive em
 um único lugar — o pacote [`conexoes`](referencia/conexoes.md).
+
+!!! tip "Novo por aqui? Comece pelos [Conceitos](conceitos.md)"
+    Ele explica *por que* o modelo tem esta forma — grão, dimensão conformada, chave
+    natural, partição — e lista os defeitos que este projeto já viu quebrar **sem
+    levantar exceção**. É a leitura que evita repetir um erro caro.
 
 ---
 
@@ -15,20 +20,39 @@ um único lugar — o pacote [`conexoes`](referencia/conexoes.md).
 | | |
 |---|---|
 | **Origem** | MySQL/MariaDB — SIGER, schema `02794s000` |
-| **Destino** | Snowflake — `SUGARSHOES.DW` |
-| **Estratégia de carga** | *Full refresh* (`if_table_exists="replace"`) |
+| **Destinos** | S3 (`dw-sugarshoes-2026`, Parquet) e Snowflake (`SUGARSHOES.DW`) |
+| **Quem escolhe o destino** | a variável `DW_DESTINOS` — **um lugar só** |
 | **Extração** | Polars + connectorx (Arrow, sem passar por Pandas) |
-| **Carga** | ADBC (`DataFrame.write_database`) |
+| **Carga S3** | Parquet, partição Hive `coluna=valor/` |
+| **Carga Snowflake** | ADBC (`DataFrame.write_database`), *full refresh* |
+| **Catálogo/consulta** | AWS Glue Crawler → Athena (`dw_sugarshoes`, `sa-east-1`) |
 | **Orquestração** | Airflow 2.10.4 (LocalExecutor + Postgres) via Docker Compose |
-| **Agendamento** | `0 6 * * *` — todo dia às 06:00 UTC, para os 9 ETLs |
-| **Janela de dados** | Fatos transacionais a partir de `2024-09-01` |
+| **Agendamento** | `0 6 * * *` — todo dia às 06:00 UTC |
 
-## Os 9 ETLs
+## Trocar o destino de tudo
 
-**Dimensões** — `dim_produto`, `dim_local`, `dim_colaborador`, `dim_municipio`,
-`dim_empresa`
+Um ETL declara **o que** extrai; **onde** grava é configuração. Uma linha no `.env`
+muda os ETLs todos:
+
+```bash
+DW_DESTINOS=s3                # só o data lake
+DW_DESTINOS=snowflake         # só o Snowflake
+DW_DESTINOS=s3,snowflake      # os dois (extrai uma vez, grava nos dois)
+```
+
+O porquê está em [Conceitos → destino é configuração](conceitos.md#destino-e-configuracao-nao-codigo).
+
+## Os ETLs
+
+**Dimensões** — `dim_produto`, `dim_local_est`, `dim_colaborador`, `dim_municipio`,
+`dim_empresa`, `dim_cliente`, `dim_fornecedor`, `dim_formulacao`
 
 **Fatos** — `fato_compra`, `fato_estoque`, `fato_cte`, `fato_cte_nota`
+
+!!! note "Nem todos estão no catálogo"
+    `dim_cliente`, `dim_fornecedor` e `dim_formulacao` existem e estão no formato
+    novo, mas ainda **não foram registradas em `catalogo.py`** — então não rodam pelo
+    Airflow nem pelo `main.py all`. Ver [Pendências](pendencias.md).
 
 Grão, colunas e origem de cada tabela estão em [Modelo de dados](modelo-dados.md).
 
@@ -36,11 +60,16 @@ Grão, colunas e origem de cada tabela estão em [Modelo de dados](modelo-dados.
 
 <div class="grid cards" markdown>
 
+- **[Conceitos](conceitos.md)** — por que um DW, modelagem dimensional, grão,
+  dimensão conformada, camadas do lake e as armadilhas que não dão erro.
+
 - **[Arquitetura](arquitetura.md)** — como as peças se encaixam, o fluxo de uma
   execução e as decisões de projeto por trás delas.
 
 - **[Modelo de dados](modelo-dados.md)** — o que cada tabela do DW contém, seu grão
   e as tabelas do SIGER que a alimentam.
+
+- **[Data warehouse na AWS](aws.md)** — bucket, IAM, crawler, Athena e custo.
 
 - **[Runbook](runbook.md)** — subir o ambiente, rodar um ETL na mão, ler os logs e
   resolver os erros que já apareceram em produção.
@@ -66,8 +95,12 @@ Detalhes, pré-requisitos e o passo a passo comentado estão no [Runbook](runboo
 
 - **Nomes em português.** Módulos, funções e variáveis seguem o vocabulário do
   negócio (`origens`, `destinos`, `executar`, `conferir_carga`). Aliases SQL e nomes
-  de tabela no Snowflake ficam em `MAIÚSCULO`.
+  de tabela no DW ficam em `MAIÚSCULO`.
 - **A query mora no arquivo do ETL.** Não há camada de templates nem arquivos `.sql`
   soltos — abrir `fatos/fato_cte.py` mostra tudo o que aquele ETL faz.
+- **O módulo não conhece o destino.** `pipeline(query, "DIM_CLIENTE")` e pronto. O
+  único argumento extra aceito é `particao`, porque partição é propriedade do dado.
+- **A coluna-chave tem o mesmo nome na dimensão e no fato.** `CLIENTE`, `PRODUTO`,
+  `COD_IBGE` — assim o JOIN vira `USING (...)` e o SQL cobra a convenção.
 - **O catálogo é a fonte da verdade.** Um ETL só existe de fato depois de registrado
   em `catalogo.py`; é de lá que o Airflow e a CLI leem.

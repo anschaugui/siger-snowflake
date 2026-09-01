@@ -1,61 +1,73 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+import os
 import time
 from contextlib import contextmanager
+
 import polars as pl
+
 from .origens import extrair_mysql, extrair_postgres_senda
-from .destinos import (
-    carregar_snowflake, conectar_snowflake,
-    carregar_s3_parquet, carregar_s3_particionado, por_periodo,
-)
+from .destinos import carregar_snowflake, conectar_snowflake, carregar_s3
+
+
+DESTINOS = {
+    "s3": carregar_s3,
+    "snowflake": carregar_snowflake,
+}
+
+def destinos_configurados() -> list[str]:
+    """Lê DW_DESTINOS e FALHA ALTO se estiver errado.
+
+    ⚠ Falhar aqui é de propósito. O erro tem de aparecer ANTES da extração —
+      que é a parte cara (13s contra 0,2s da carga). Um destino digitado errado
+      passando batido significa extrair tudo e descartar em silêncio.
+"""
+    nomes = [n.strip().lower() for n in os.getenv("DW_DESTINOS","s3").split(",") if n.strip()]
+    if not nomes:
+        raise ValueError(
+            "DW_DESTINOS está vazio. A extração rodaria e o dado seria descartado"
+            "Definono .evn, ex.: DW_DESTINOS=s3"
+        )
+    return nomes
 
 @contextmanager
-def cronometro(nome: str):
+def cronometro(nome:str):
     t0 = time.perf_counter()
     yield
-    print(f"{nome}: {time.perf_counter() - t0:.1f}s")
+    print(f"  {nome}: {time.perf_counter() - t0} segundos")
 
 def conferir_carga(df: pl.DataFrame, tabela: str) -> None:
+    """Compara o que saiu da origem com o que chegou no Snowflake.
+
+    ⚠ Só faz sentido para o Snowflake — no S3 não há tabela para contar. Por
+      isso o pipeline só chama esta função quando 'snowflake' está nos destinos.
+    """
     esperado = df.height
     conn = conectar_snowflake()
     try:
-        real = conn.cursor().execute(f"SELECT COUNT(*) FROM {tabela}").fetchone()[0]
+        real = conn.cursor().execute(f"SELECT * FROM {tabela}").fetchone()[0]
     finally:
         conn.close()
-    status = "OK" if esperado == real else "ERROR"
-    print(f"[{status}] {tabela}: extraído={esperado} | snowflake={real}")
+    status = "OK" if esperado == real else "Erro"
+    print(f"  [{status}] {tabela}: extraído={esperado} | snowflake={real}")
 
-
-def pipeline(query: str, tabela: str, origem=extrair_mysql,
-             destino=None, arquivo_s3=None) -> int:
-    origem = origem or extrair_mysql
-    with cronometro('extração'):
+def pipeline(query: str,
+             tabela: str,
+             *,
+             origem=extrair_mysql,
+             particao: str | None = None,
+             destinos: list[str] | None = None,
+             ) -> int:
+    nomes = destinos or destinos_configurados()
+    with cronometro("Extração"):
         df = origem(query)
 
-    if not destino and not arquivo_s3:
-        raise ValueError(
-            f'{tabela}: nenhum destino informado (destino= e arquivo_s3= vazios). '
-            'A extração rodou, mas o dado seria descartado sem isso'
-        )
+    for nome in nomes:
+        with cronometro(f"carga {nome}"):
+            DESTINOS[nome](df, tabela, particao)
+        if nome == "snowflake":
+            conferir_carga(df, tabela)
 
-    nrows = df.height
-    if destino:
-        with cronometro('carga'):
-            nrows = destino(df, tabela)
-        conferir_carga(df, tabela)
-    if arquivo_s3:
-        with cronometro('arquivo_s3'):
-            arquivo_s3(df, tabela)
-    print(f"{tabela}: {nrows}")
-    return nrows
-
-def pipeline_completo(query:str, tabela:str, **kwargs) -> int:
-    """
-    O caso comum: Snowflake + s3, sem partição. atalho para pipeline().
-    :param query:
-    :param tabela:
-    :param kwargs:
-    :return:
-    """
-    return pipeline(query, tabela, destino=carregar_snowflake, arquivo_s3=carregar_s3_parquet, **kwargs)
+    print(f"{tabela}: {df.height} linhas -> {', '.join(nomes)}")
+    return df.height
